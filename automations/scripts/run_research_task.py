@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from openai import OpenAI
+from openai import OpenAI, OpenAIError
 
 
 TASKS = {
@@ -53,26 +53,6 @@ def run_task(task_id: str, output_root: Path, model: str, reasoning_effort: str)
     now = datetime.now(ZoneInfo("Asia/Shanghai"))
     run_date = now.strftime("%Y-%m-%d")
 
-    client = OpenAI()
-    response = client.responses.create(
-        model=model,
-        reasoning={"effort": reasoning_effort},
-        tools=[
-            {
-                "type": "web_search",
-                "search_context_size": "medium",
-                "user_location": {
-                    "type": "approximate",
-                    "country": "CN",
-                    "timezone": "Asia/Shanghai",
-                },
-            }
-        ],
-        tool_choice="auto",
-        include=["web_search_call.action.sources"],
-        input=build_input(task_id, task["name"], prompt, run_date),
-    )
-
     report_dir = output_root / run_date
     report_dir.mkdir(parents=True, exist_ok=True)
     report_path = report_dir / f"{task_id}.md"
@@ -84,6 +64,38 @@ def run_task(task_id: str, output_root: Path, model: str, reasoning_effort: str)
         f"model: {model}\n"
         f"---\n\n"
     )
+
+    client = OpenAI()
+    try:
+        response = client.responses.create(
+            model=model,
+            reasoning={"effort": reasoning_effort},
+            tools=[
+                {
+                    "type": "web_search",
+                    "search_context_size": "medium",
+                    "user_location": {
+                        "type": "approximate",
+                        "country": "CN",
+                        "timezone": "Asia/Shanghai",
+                    },
+                }
+            ],
+            tool_choice="auto",
+            include=["web_search_call.action.sources"],
+            input=build_input(task_id, task["name"], prompt, run_date),
+        )
+    except OpenAIError as exc:
+        report_path.write_text(
+            metadata
+            + "# 自动化运行失败\n\n"
+            + f"- 错误类型：`{type(exc).__name__}`\n"
+            + f"- 错误信息：`{exc}`\n\n"
+            + "请检查 OpenAI API key、项目额度、billing 状态、模型权限和网络配置。\n",
+            encoding="utf-8",
+        )
+        raise
+
     report_path.write_text(metadata + response.output_text.strip() + "\n", encoding="utf-8")
     return report_path
 
