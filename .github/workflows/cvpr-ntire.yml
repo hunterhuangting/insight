@@ -28,9 +28,11 @@ jobs:
 
       - name: Run research task
         env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_MODEL: gpt-5.2
-          OPENAI_REASONING_EFFORT: medium
+          OPENROUTER_MODEL: openrouter/auto
+          OPENROUTER_SITE_URL: https://github.com/hunterhuangting/insight
+          OPENROUTER_APP_NAME: insight-automations
         run: python automations/scripts/run_research_task.py cvpr-ntire
 
       - name: Upload report artifact
