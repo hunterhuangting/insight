@@ -62,28 +62,40 @@ def run_task(task_id: str, output_root: Path, model: str, reasoning_effort: str)
         f"task_name: {task['name']}\n"
         f"run_at: {now.isoformat()}\n"
         f"model: {model}\n"
+        f"provider: openrouter\n"
         f"---\n\n"
     )
 
-    client = OpenAI()
+    api_key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise SystemExit("OPENROUTER_API_KEY or OPENAI_API_KEY is required")
+
+    client = OpenAI(
+        base_url=os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+        api_key=api_key,
+        default_headers={
+            "HTTP-Referer": os.environ.get(
+                "OPENROUTER_SITE_URL",
+                "https://github.com/hunterhuangting/insight",
+            ),
+            "X-Title": os.environ.get("OPENROUTER_APP_NAME", "insight-automations"),
+        },
+    )
     try:
-        response = client.responses.create(
+        response = client.chat.completions.create(
             model=model,
-            reasoning={"effort": reasoning_effort},
+            messages=[
+                {
+                    "role": "user",
+                    "content": build_input(task_id, task["name"], prompt, run_date),
+                }
+            ],
             tools=[
                 {
-                    "type": "web_search",
-                    "search_context_size": "medium",
-                    "user_location": {
-                        "type": "approximate",
-                        "country": "CN",
-                        "timezone": "Asia/Shanghai",
-                    },
+                    "type": "openrouter:web_search",
                 }
             ],
             tool_choice="auto",
-            include=["web_search_call.action.sources"],
-            input=build_input(task_id, task["name"], prompt, run_date),
         )
     except OpenAIError as exc:
         report_path.write_text(
@@ -91,12 +103,24 @@ def run_task(task_id: str, output_root: Path, model: str, reasoning_effort: str)
             + "# 自动化运行失败\n\n"
             + f"- 错误类型：`{type(exc).__name__}`\n"
             + f"- 错误信息：`{exc}`\n\n"
-            + "请检查 OpenAI API key、项目额度、billing 状态、模型权限和网络配置。\n",
+            + "请检查 OpenRouter API key、账户余额、模型权限、web search 工具权限和网络配置。\n",
             encoding="utf-8",
         )
         raise
 
-    report_path.write_text(metadata + response.output_text.strip() + "\n", encoding="utf-8")
+    message = response.choices[0].message
+    content = (message.content or "").strip()
+    annotations = getattr(message, "annotations", None) or []
+    if annotations:
+        content += "\n\n## OpenRouter 引用注释\n\n"
+        for annotation in annotations:
+            citation = getattr(annotation, "url_citation", None)
+            if citation:
+                title = getattr(citation, "title", None) or getattr(citation, "url", "")
+                url = getattr(citation, "url", "")
+                content += f"- [{title}]({url})\n"
+
+    report_path.write_text(metadata + content + "\n", encoding="utf-8")
     return report_path
 
 
@@ -104,16 +128,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("task_id", help="Task id, e.g. cvpr-ntire")
     parser.add_argument("--output-root", default="automations/reports")
-    parser.add_argument("--model", default=os.environ.get("OPENAI_MODEL", "gpt-5.2"))
+    parser.add_argument(
+        "--model",
+        default=os.environ.get("OPENROUTER_MODEL")
+        or os.environ.get("OPENAI_MODEL")
+        or "openrouter/auto",
+    )
     parser.add_argument(
         "--reasoning-effort",
         default=os.environ.get("OPENAI_REASONING_EFFORT", "medium"),
         choices=["low", "medium", "high"],
     )
     args = parser.parse_args()
-
-    if not os.environ.get("OPENAI_API_KEY"):
-        raise SystemExit("OPENAI_API_KEY is required")
 
     report_path = run_task(
         task_id=args.task_id,
